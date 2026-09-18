@@ -1,392 +1,189 @@
---[[
-    ██╗     ██╗  ██╗██████╗        ██████╗ ██████╗ ██████╗ ███████╗
-    ██║     ╚██╗██╔╝██╔══██╗      ██╔════╝██╔═══██╗██╔══██╗██╔════╝
-    ██║      ╚███╔╝ ██████╔╝█████╗██║     ██║   ██║██████╔╝█████╗  
-    ██║      ██╔██╗ ██╔══██╗╚════╝██║     ██║   ██║██╔══██╗██╔══╝  
-    ███████╗██╔╝ ██╗██║  ██║      ╚██████╗╚██████╔╝██║  ██║███████╗
-    ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝       ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝
+--[[ ═══════════════════════════════════════════════════════════════════════════
+     LXR-DOCTOR — Server: death, the timer, revives, treatment, the bed
+     ═══════════════════════════════════════════════════════════════════════════
+     The client only reports "I went down"; the server stamps the time,
+     marks the character dead in core metadata (survives relogs), tells
+     dispatch, and decides every way back: a doctor's revive, the office
+     bed, or the timer and the fee.
+     ═══════════════════════════════════════════════════════════════════════════
+     © 2026 iBoss21 / LXRCore — All Rights Reserved
+     ═══════════════════════════════════════════════════════════════════════════ ]]
 
-    🐺 LXR Ambulance Job — Server-Side Logic
+local LXRCore = exports['lxr-core']:GetCoreObject()
+local LXR = exports['lxr-core']:GetLXR()
+local D = LXRDoctor
+local Inventory = LXRCore.Inventory
+local RES = GetCurrentResourceName()
+local diedAt = {}      -- src → os.time()
+local buckets = {}
 
-    ═══════════════════════════════════════════════════════════════════════════════
-    SERVER INFORMATION
-    ═══════════════════════════════════════════════════════════════════════════════
-
-    Server:    The Land of Wolves 🐺
-    Developer: iBoss21 / The Lux Empire
-    Website:   https://www.wolves.land
-    Discord:   https://discord.gg/CrKcWdfd3A
-    Store:     https://theluxempire.tebex.io
-
-    ═══════════════════════════════════════════════════════════════════════════════
-
-    © 2026 iBoss21 / The Lux Empire | wolves.land | All Rights Reserved
-]]
-
-local PlayerInjuries = {}
-local PlayerWeaponWounds = {}
-local sharedItems = exports['lxr-core']:GetItems()
--- Events
-
--- Compatibility with txAdmin Menu's heal options.
--- This is an admin only server side event that will pass the target player id or -1.
-AddEventHandler('txAdmin:events:healedPlayer', function(eventData)
-	if GetInvokingResource() ~= "monitor" or type(eventData) ~= "table" or type(eventData.id) ~= "number" then
-		return
-	end
-
-	TriggerClientEvent('hospital:client:Revive', eventData.id)
-	TriggerClientEvent("hospital:client:HealInjuries", eventData.id, "full")
-end)
-
-RegisterNetEvent('hospital:server:SendToBed', function(bedId, isRevive)
-	local src = source
-	local Player = exports['lxr-core']:GetPlayer(src)
-	TriggerClientEvent('hospital:client:SendToBed', src, bedId, Config.Locations["beds"][bedId], isRevive)
-	TriggerClientEvent('hospital:client:SetBed', -1, bedId, true)
-	Player.Functions.RemoveMoney("bank", Config.BillCost , "respawned-at-hospital")
-	TriggerEvent('lxr-bossmenu:server:addAccountMoney', "ambulance", Config.BillCost)
-	--TriggerClientEvent('hospital:client:SendBillEmail', src, Config.BillCost)
-end)
-
-RegisterNetEvent('hospital:server:RespawnAtHospital', function(closestBed)
-	local src = source
-	local Player = exports['lxr-core']:GetPlayer(src)
-	-- Check if Bed is taken else send to Bed 1
-	if not Config.Locations["beds"][closestBed].taken then
-		TriggerClientEvent('hospital:client:SendToBed', src, closestBed, Config.Locations["beds"][closestBed], true)
-		TriggerClientEvent('hospital:client:SetBed', -1, closestBed, true)
-		if Config.WipeInventoryOnRespawn then
-			Player.Functions.ClearInventory()
-			MySQL.query('UPDATE players SET inventory = ? WHERE citizenid = ?', { json.encode({}), Player.PlayerData.citizenid })
-			TriggerClientEvent('LXRCore:Notify', src, 9, Lang:t('error.possessions_taken'), 5000, 0, 'mp_lobby_textures', 'cross', 'COLOR_WHITE')
-		end
-		Player.Functions.RemoveMoney("bank", Config.BillCost, "respawned-at-hospital")
-		TriggerEvent('lxr-bossmenu:server:addAccountMoney', "ambulance", Config.BillCost)
-		--TriggerClientEvent('hospital:client:SendBillEmail', src, Config.BillCost)
-	else
-		--print("All beds were full, placing in first bed as fallback")
-		TriggerClientEvent('hospital:client:SendToBed', src, 1, Config.Locations["beds"][1], true)
-		TriggerClientEvent('hospital:client:SetBed', -1, 1, true)
-		if Config.WipeInventoryOnRespawn then
-			Player.Functions.ClearInventory()
-			MySQL.query('UPDATE players SET inventory = ? WHERE citizenid = ?', { json.encode({}), Player.PlayerData.citizenid })
-			TriggerClientEvent('LXRCore:Notify', src, 9, Lang:t('error.possessions_taken'), 5000, 0, 'mp_lobby_textures', 'cross', 'COLOR_WHITE')
-		end
-		Player.Functions.RemoveMoney("bank", Config.BillCost, "respawned-at-hospital")
-		TriggerEvent('lxr-bossmenu:server:addAccountMoney', "ambulance", Config.BillCost)
-		--TriggerClientEvent('hospital:client:SendBillEmail', src, Config.BillCost)
-	end
-end)
-
-RegisterNetEvent('hospital:server:ambulanceAlert', function(text)
-    local src = source
+local function limited(src)
+    local b = buckets[src]
+    local now = GetGameTimer()
+    if not b or now - b.at > Config.Security.rateLimit.windowMs then b = { at = now, n = 0 } buckets[src] = b end
+    b.n = b.n + 1
+    return b.n > Config.Security.rateLimit.burst
+end
+local function player(src) return LXRCore.Functions.GetPlayer(src) end
+local function notify(src, key, kind, vars) LXRCore.Notify(src, Lang:t(key, vars), kind or 'info') end
+local function near(a, b, dist)
+    local pa, pb = GetPlayerPed(a), GetPlayerPed(b)
+    return pa ~= 0 and pb ~= 0 and #(GetEntityCoords(pa) - GetEntityCoords(pb)) <= (dist or Config.Security.maxDistance)
+end
+local function nearCoords(src, c, dist)
     local ped = GetPlayerPed(src)
-    local coords = GetEntityCoords(ped)
-    local players = exports['lxr-core']:GetLXRPlayers()
-    for k,v in pairs(players) do
-        if v.PlayerData.job.name == 'ambulance' and v.PlayerData.job.onduty then
-            TriggerClientEvent('hospital:client:ambulanceAlert', v.PlayerData.source, coords, text)
+    return ped ~= 0 and #(GetEntityCoords(ped) - vector3(c.x, c.y, c.z)) <= (dist or Config.Security.maxDistance)
+end
+local function nameOf(P) local ci = P.PlayerData.charinfo return ci.firstname .. ' ' .. ci.lastname end
+local function log(msg, data) if Config.Debug.log then LXRCore.Log.info('doctor', msg, data) end end
+local function doctorsOnDuty()
+    local n = 0
+    for _, P in pairs(LXRCore.Players) do if D.IsDoctor(P.PlayerData.job) then n = n + 1 end end
+    return n
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- ☠️ DOWN
+-- ═══════════════════════════════════════════════════════════════════════════════
+local function setDead(P, dead, reason)
+    local src = P.PlayerData.source
+    P.Functions.SetMetaData('isdead', dead == true)
+    Player(src).state:set('dead', dead == true, true)
+    if dead then
+        diedAt[src] = os.time()
+        Player(src).state:set('diedAt', diedAt[src], true)
+        LXRCore.Emit('lxr:player:died', nil, src, reason)
+    else
+        diedAt[src] = nil
+        Player(src).state:set('diedAt', false, true)
+        LXRCore.Emit('lxr:player:revived', nil, src, reason)
+    end
+end
+
+RegisterNetEvent('lxr-doctor:server:down', function(cause)
+    local src = source
+    if limited(src) then return end
+    local P = player(src)
+    if not P or P.PlayerData.metadata.isdead then return end
+    setDead(P, true, tostring(cause or 'unknown'))
+    TriggerClientEvent('lxr-doctor:client:down', src, Config.Death.bleedOutSeconds, diedAt[src])
+    log('down', { source = src, cause = cause })
+    if Config.Death.callDoctors and GetResourceState('lxr-dispatch') == 'started' then
+        if not Config.Death.callOnlyIfOnDuty or doctorsOnDuty() > 0 then
+            exports['lxr-dispatch']:Raise({ kind = 'wounded', coords = GetEntityCoords(GetPlayerPed(src)), title = Lang:t('call.wounded', { name = nameOf(P) }), src = src })
         end
     end
 end)
 
-RegisterNetEvent('hospital:server:LeaveBed', function(id)
-    TriggerClientEvent('hospital:client:SetBed', -1, id, false)
+-- giving up: only after the timer, at the nearest office, for the fee
+LXR.RPC.Register('lxr-doctor:respawn', function(src)
+    if limited(src) then return false, 'rate' end
+    local P = player(src)
+    if not P or not P.PlayerData.metadata.isdead then return false, 'not_dead' end
+    local left = D.BleedLeft(diedAt[src] or 0, os.time())
+    if left > 0 then return false, 'too_soon', left end
+    local office = D.Nearest(GetEntityCoords(GetPlayerPed(src)))
+    if not office then return false, 'invalid' end
+    local fee = Config.Death.respawnFee
+    if fee > 0 then
+        if not P.Functions.RemoveMoney(Config.Death.respawnAccount, fee, 'doctor:bed') then
+            if not (Config.Death.respawnFallback and P.Functions.RemoveMoney(Config.Death.respawnFallback, fee, 'doctor:bed')) then fee = 0 end   -- the county pays for paupers
+        end
+    end
+    if Config.Death.dropWeaponsOnRespawn and GetResourceState('lxr-weapons') == 'started' then exports['lxr-weapons']:Disarm(src, 'death') end
+    setDead(P, false, 'respawn')
+    log('respawn', { source = src, office = office.id, fee = fee })
+    return true, { spawn = { x = office.spawn.x, y = office.spawn.y, z = office.spawn.z, w = office.spawn.w }, health = Config.Death.respawnHealth, fee = fee, label = office.label }
 end)
 
-RegisterNetEvent('hospital:server:SyncInjuries', function(data)
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 🩺 DOCTORS
+-- ═══════════════════════════════════════════════════════════════════════════════
+local function pair(src, targetId)
+    if limited(src) then return nil, nil, 'rate' end
+    local Dr = player(src)
+    if not Dr or not D.IsDoctor(Dr.PlayerData.job) then return nil, nil, 'not_doctor' end
+    local T = player(tonumber(targetId) or -1)
+    if not T or T.PlayerData.source == src then return nil, nil, 'invalid' end
+    if not near(src, T.PlayerData.source) then return nil, nil, 'too_far' end
+    return Dr, T
+end
+
+-- the doctor's client runs the progress bar first, then reports here
+RegisterNetEvent('lxr-doctor:server:revive', function(targetId)
     local src = source
-    PlayerInjuries[src] = data
+    local Dr, T, why = pair(src, targetId)
+    if not Dr then return notify(src, 'error.' .. why, 'error') end
+    if not T.PlayerData.metadata.isdead then return notify(src, 'error.not_down', 'error') end
+    local item = Config.Doctors.reviveItem
+    if item and not Dr.Functions.RemoveItem(item, 1, nil, 'revive') then return notify(src, 'error.no_item', 'error', { item = LXRShared.Items[item] and LXRShared.Items[item].label or item }) end
+    setDead(T, false, 'revived')
+    TriggerClientEvent('lxr-doctor:client:revive', T.PlayerData.source, Config.Death.reviveHealth)
+    notify(src, 'info.revived', 'success', { name = nameOf(T) })
+    notify(T.PlayerData.source, 'info.you_revived', 'inform', { name = nameOf(Dr) })
+    log('revive', { source = src, target = T.PlayerData.source })
 end)
 
-RegisterNetEvent('hospital:server:SetWeaponDamage', function(data)
-	local src = source
-	local Player = exports['lxr-core']:GetPlayer(src)
-	if Player then
-		PlayerWeaponWounds[Player.PlayerData.source] = data
-	end
+RegisterNetEvent('lxr-doctor:server:treat', function(targetId, item)
+    local src = source
+    local Dr, T, why = pair(src, targetId)
+    if not Dr then return notify(src, 'error.' .. why, 'error') end
+    if T.PlayerData.metadata.isdead then return notify(src, 'error.is_down', 'error') end
+    if not D.Treats(item) then return notify(src, 'error.invalid', 'error') end
+    if not Dr.Functions.RemoveItem(item, 1, nil, 'treat') then return notify(src, 'error.no_item', 'error', { item = LXRShared.Items[item].label }) end
+    local heal = D.Heal(item)
+    TriggerClientEvent('lxr-doctor:client:heal', T.PlayerData.source, heal)
+    notify(src, 'info.treated', 'success', { name = nameOf(T), item = LXRShared.Items[item].label })
+    notify(T.PlayerData.source, 'info.you_treated', 'inform', { name = nameOf(Dr) })
+    LXRCore.Emit('lxr:doctor:treated', nil, T.PlayerData.source, src, item, heal)
 end)
 
-RegisterNetEvent('hospital:server:RestoreWeaponDamage', function()
-	local src = source
-	local Player = exports['lxr-core']:GetPlayer(src)
-	PlayerWeaponWounds[Player.PlayerData.source] = nil
+-- duty at the office desk
+LXR.RPC.Register('lxr-doctor:duty', function(src, officeId)
+    if limited(src) then return false, 'rate' end
+    local P, o = player(src), D.Office(officeId)
+    if not P or not o or not D.IsDoctor(P.PlayerData.job, true) then return false, 'not_doctor' end
+    if not nearCoords(src, o.desk) then return false, 'too_far' end
+    P.Functions.SetJobDuty(not P.PlayerData.job.onduty)
+    notify(src, P.PlayerData.job.onduty and 'info.on_duty' or 'info.off_duty', 'inform')
+    return true, P.PlayerData.job.onduty
 end)
 
-RegisterNetEvent('hospital:server:SetDeathStatus', function(isDead)
-	local src = source
-	local Player = exports['lxr-core']:GetPlayer(src)
-	if Player then
-		Player.Functions.SetMetaData("isdead", isDead)
-	end
+-- the bed: treatment for a fee when no doctor is about
+LXR.RPC.Register('lxr-doctor:bed', function(src, officeId)
+    if limited(src) then return false, 'rate' end
+    local P, o = player(src), D.Office(officeId)
+    if not P or not o or not Config.Bed.enabled then return false, 'invalid' end
+    if not nearCoords(src, o.bed) then return false, 'too_far' end
+    if not Config.Bed.whenDoctorsOnDuty then
+        for _, j in ipairs(o.jobs) do if #LXRCore.Functions.GetPlayersOnDuty(j) > 0 then return false, 'doctor_on_duty' end end
+    end
+    if Config.Bed.fee > 0 and not P.Functions.RemoveMoney('cash', Config.Bed.fee, 'doctor:bed') then return false, 'no_money', Config.Bed.fee end
+    if P.PlayerData.metadata.isdead then setDead(P, false, 'bed') TriggerClientEvent('lxr-doctor:client:revive', src, Config.Bed.health) end
+    return true, { health = Config.Bed.health, ms = Config.Bed.ms, bed = { x = o.bed.x, y = o.bed.y, z = o.bed.z, w = o.bed.w } }
 end)
 
-RegisterNetEvent('hospital:server:SetLaststandStatus', function(bool)
-	local src = source
-	local Player = exports['lxr-core']:GetPlayer(src)
-	if Player then
-		Player.Functions.SetMetaData("inlaststand", bool)
-	end
-end)
-
-RegisterNetEvent('hospital:server:SetArmor', function(amount)
-	local src = source
-	local Player = exports['lxr-core']:GetPlayer(src)
-	if Player then
-		Player.Functions.SetMetaData("armor", amount)
-	end
-end)
-
-RegisterNetEvent('hospital:server:TreatWounds', function(playerId)
-	local src = source
-	local Player = exports['lxr-core']:GetPlayer(src)
-	local Patient = exports['lxr-core']:GetPlayer(playerId)
-	if Patient then
-		if Player.PlayerData.job.name =="ambulance" then
-			Player.Functions.RemoveItem('bandage', 1)
-			TriggerClientEvent('inventory:client:ItemBox', src, sharedItems['bandage'], "remove")
-			TriggerClientEvent("hospital:client:HealInjuries", Patient.PlayerData.source, "full")
-		end
-	end
-end)
-
-RegisterNetEvent('hospital:server:SetDoctor', function()
-	local amount = 0
-    local players = exports['lxr-core']:GetLXRPlayers()
-    for k,v in pairs(players) do
-        if v.PlayerData.job.name == 'ambulance' and v.PlayerData.job.onduty then
-            amount = amount + 1
-        end
-	end
-	TriggerClientEvent("hospital:client:SetDoctorCount", -1, amount)
-end)
-
-RegisterNetEvent('hospital:server:RevivePlayer', function(playerId, isOldMan)
-	local src = source
-	local Player = exports['lxr-core']:GetPlayer(src)
-	local Patient = exports['lxr-core']:GetPlayer(playerId)
-	local oldMan = isOldMan or false
-	if Patient then
-		if oldMan then
-			if Player.Functions.RemoveMoney("cash", 5000, "revived-player") then
-				Player.Functions.RemoveItem('firstaid', 1)
-				TriggerClientEvent('inventory:client:ItemBox', src, sharedItems['firstaid'], "remove")
-				TriggerClientEvent('hospital:client:Revive', Patient.PlayerData.source)
-			else
-				TriggerClientEvent('LXRCore:Notify', src, 9, Lang:t('error.not_enough_money'), 5000, 0, 'mp_lobby_textures', 'cross', 'COLOR_WHITE')
-			end
-		else
-			Player.Functions.RemoveItem('firstaid', 1)
-			TriggerClientEvent('inventory:client:ItemBox', src, sharedItems['firstaid'], "remove")
-			TriggerClientEvent('hospital:client:Revive', Patient.PlayerData.source)
-		end
-	end
-end)
-
-RegisterNetEvent('hospital:server:SendDoctorAlert', function()
-    local players = exports['lxr-core']:GetLXRPlayers()
-    for k,v in pairs(players) do
-        if v.PlayerData.job.name == 'ambulance' and v.PlayerData.job.onduty then
-			TriggerClientEvent('LXRCore:Notify', v.PlayerData.source, 9, Lang:t('info.dr_needed'), 'ambulance')
-		end
-	end
-end)
-
-RegisterNetEvent('hospital:server:UseFirstAid', function(targetId)
-	local src = source
-	local Target = exports['lxr-core']:GetPlayer(targetId)
-	if Target then
-		TriggerClientEvent('hospital:client:CanHelp', targetId, src)
-	end
-end)
-
-RegisterNetEvent('hospital:server:CanHelp', function(helperId, canHelp)
-	local src = source
-	if canHelp then
-		TriggerClientEvent('hospital:client:HelpPerson', helperId, src)
-	else
-		TriggerClientEvent('LXRCore:Notify', helperId, 9, Lang:t('error.cant_help'), 5000, 0, 'mp_lobby_textures', 'cross', 'COLOR_WHITE')
-	end
-end)
-
--- Callbacks
-
-exports['lxr-core']:CreateCallback('hospital:GetDoctors', function(source, cb)
-	local amount = 0
-    local players = exports['lxr-core']:GetLXRPlayers()
-    for k,v in pairs(players) do
-        if v.PlayerData.job.name == 'ambulance' and v.PlayerData.job.onduty then
-			amount = amount + 1
-		end
-	end
-	cb(amount)
-end)
-
-exports['lxr-core']:CreateCallback('hospital:GetPlayerStatus', function(source, cb, playerId)
-	local Player = exports['lxr-core']:GetPlayer(playerId)
-	local injuries = {}
-	injuries["WEAPONWOUNDS"] = {}
-	if Player then
-		if PlayerInjuries[Player.PlayerData.source] then
-			if (PlayerInjuries[Player.PlayerData.source].isBleeding > 0) then
-				injuries["BLEED"] = PlayerInjuries[Player.PlayerData.source].isBleeding
-			end
-			for k, v in pairs(PlayerInjuries[Player.PlayerData.source].limbs) do
-				if PlayerInjuries[Player.PlayerData.source].limbs[k].isDamaged then
-					injuries[k] = PlayerInjuries[Player.PlayerData.source].limbs[k]
-				end
-			end
-		end
-		if PlayerWeaponWounds[Player.PlayerData.source] then
-			for k, v in pairs(PlayerWeaponWounds[Player.PlayerData.source]) do
-				injuries["WEAPONWOUNDS"][k] = v
-			end
-		end
-	end
-    cb(injuries)
-end)
-
-exports['lxr-core']:CreateCallback('hospital:GetPlayerBleeding', function(source, cb)
-	local src = source
-	if PlayerInjuries[src] and PlayerInjuries[src].isBleeding then
-		cb(PlayerInjuries[src].isBleeding)
-	else
-		cb(nil)
-	end
-end)
-
--- Commands
-
-exports['lxr-core']:AddCommand('911e', Lang:t('info.ems_report'), {{name = 'message', help = Lang:t('info.message_sent')}}, false, function(source, args)
-	local src = source
-	if args[1] then message = table.concat(args, " ") else message = Lang:t('info.civ_call') end
-    local ped = GetPlayerPed(src)
-    local coords = GetEntityCoords(ped)
-    local players = exports['lxr-core']:GetLXRPlayers()
-    for k,v in pairs(players) do
-        if v.PlayerData.job.name == 'ambulance' and v.PlayerData.job.onduty then
-            TriggerClientEvent('hospital:client:ambulanceAlert', v.PlayerData.source, coords, message)
-        end
+-- relog while dead: keep them down with the time they had left
+RegisterNetEvent('lxr-doctor:server:ready', function()
+    local src = source
+    local P = player(src)
+    if not P then return end
+    if P.PlayerData.metadata.isdead then
+        diedAt[src] = diedAt[src] or (os.time() - Config.Death.bleedOutSeconds)   -- a relog is not a shortcut, but the timer is not restarted either
+        Player(src).state:set('dead', true, true)
+        TriggerClientEvent('lxr-doctor:client:down', src, D.BleedLeft(diedAt[src], os.time()), diedAt[src])
+    else
+        Player(src).state:set('dead', false, true)
     end
 end)
 
-exports['lxr-core']:AddCommand("status", Lang:t('info.check_health'), {}, false, function(source, args)
-	local src = source
-	local Player = exports['lxr-core']:GetPlayer(src)
-	if Player.PlayerData.job.name == "ambulance" then
-		TriggerClientEvent("hospital:client:CheckStatus", src)
-	else
-		TriggerClientEvent('LXRCore:Notify', src, 9, Lang:t('error.not_ems'), 5000, 0, 'mp_lobby_textures', 'cross', 'COLOR_WHITE')
-	end
-end)
+AddEventHandler('playerDropped', function() buckets[source] = nil end)
+CreateThread(function() if Config.Debug.printBanner then print(('^1[lxr-doctor]^7 v%s — %d offices, bleed-out %ds, bed $%.2f'):format(GetResourceMetadata(RES, 'version', 0), #Config.Offices, Config.Death.bleedOutSeconds, Config.Bed.fee)) end end)
 
-exports['lxr-core']:AddCommand("heal", Lang:t('info.heal_player'), {}, false, function(source, args)
-	local src = source
-	local Player = exports['lxr-core']:GetPlayer(src)
-	if Player.PlayerData.job.name == "ambulance" then
-		TriggerClientEvent("hospital:client:TreatWounds", src)
-	else
-		TriggerClientEvent('LXRCore:Notify', src, 9, Lang:t('error.not_ems'), 5000, 0, 'mp_lobby_textures', 'cross', 'COLOR_WHITE')
-	end
-end)
-
-exports['lxr-core']:AddCommand("revivep", Lang:t('info.revive_player'), {}, false, function(source, args)
-	local src = source
-	local Player = exports['lxr-core']:GetPlayer(src)
-	if Player.PlayerData.job.name == "ambulance" then
-		TriggerClientEvent("hospital:client:RevivePlayer", src)
-	else
-		TriggerClientEvent('LXRCore:Notify', src, 9, Lang:t('error.not_ems'), 5000, 0, 'mp_lobby_textures', 'cross', 'COLOR_WHITE')
-	end
-end)
-
-exports['lxr-core']:AddCommand("revive", Lang:t('info.revive_player_a'), {{name = "id", help = Lang:t('info.player_id')}}, false, function(source, args)
-	local src = source
-	if args[1] then
-		local Player = exports['lxr-core']:GetPlayer(tonumber(args[1]))
-		if Player then
-			TriggerClientEvent('hospital:client:Revive', Player.PlayerData.source)
-		else
-			TriggerClientEvent('LXRCore:Notify', src, 9, Lang:t('error.not_online'), 5000, 0, 'mp_lobby_textures', 'cross', 'COLOR_WHITE')
-		end
-	else
-		TriggerClientEvent('hospital:client:Revive', src)
-	end
-end, "admin")
-
-exports['lxr-core']:AddCommand("setpain", Lang:t('info.pain_level'), {{name = "id", help = Lang:t('info.player_id')}}, false, function(source, args)
-	local src = source
-	if args[1] then
-		local Player = exports['lxr-core']:GetPlayer(tonumber(args[1]))
-		if Player then
-			TriggerClientEvent('hospital:client:SetPain', Player.PlayerData.source)
-		else
-			TriggerClientEvent('LXRCore:Notify', src, 9, Lang:t('error.not_online'), 5000, 0, 'mp_lobby_textures', 'cross', 'COLOR_WHITE')
-		end
-	else
-		TriggerClientEvent('hospital:client:SetPain', src)
-	end
-end, "admin")
-
-exports['lxr-core']:AddCommand("kill", Lang:t('info.kill'), {{name = "id", help = Lang:t('info.player_id')}}, false, function(source, args)
-	local src = source
-	if args[1] then
-		local Player = exports['lxr-core']:GetPlayer(tonumber(args[1]))
-		if Player then
-			TriggerClientEvent('hospital:client:KillPlayer', Player.PlayerData.source)
-		else
-			TriggerClientEvent('LXRCore:Notify', src, 9, Lang:t('error.not_online'), 5000, 0, 'mp_lobby_textures', 'cross', 'COLOR_WHITE')
-		end
-	else
-		TriggerClientEvent('hospital:client:KillPlayer', src)
-	end
-end, "admin")
-
-exports['lxr-core']:AddCommand('aheal', Lang:t('info.heal_player_a'), {{name = 'id', help = Lang:t('info.player_id')}}, false, function(source, args)
-	local src = source
-	if args[1] then
-		local Player = exports['lxr-core']:GetPlayer(tonumber(args[1]))
-		if Player then
-			TriggerClientEvent('hospital:client:adminHeal', Player.PlayerData.source)
-		else
-			TriggerClientEvent('LXRCore:Notify', src, 9, Lang:t('error.not_online'), 5000, 0, 'mp_lobby_textures', 'cross', 'COLOR_WHITE')
-		end
-	else
-		TriggerClientEvent('hospital:client:adminHeal', src)
-	end
-end, 'admin')
-
--- Items
-
-exports['lxr-core']:CreateUseableItem("ifaks", function(source, item)
-	local src = source
-	local Player = exports['lxr-core']:GetPlayer(src)
-	if Player.Functions.GetItemByName(item.name) ~= nil then
-		TriggerClientEvent("hospital:client:UseIfaks", src)
-	end
-end)
-
-exports['lxr-core']:CreateUseableItem("bandage", function(source, item)
-	local src = source
-	local Player = exports['lxr-core']:GetPlayer(src)
-	if Player.Functions.GetItemByName(item.name) ~= nil then
-		TriggerClientEvent("hospital:client:UseBandage", src)
-	end
-end)
-
-exports['lxr-core']:CreateUseableItem("painkillers", function(source, item)
-	local src = source
-	local Player = exports['lxr-core']:GetPlayer(src)
-	if Player.Functions.GetItemByName(item.name) ~= nil then
-		TriggerClientEvent("hospital:client:UsePainkillers", src)
-	end
-end)
-
-exports['lxr-core']:CreateUseableItem("firstaid", function(source, item)
-	local src = source
-	local Player = exports['lxr-core']:GetPlayer(src)
-	if Player.Functions.GetItemByName(item.name) ~= nil then
-		TriggerClientEvent("hospital:client:UseFirstAid", src)
-	end
-end)
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 📤 EXPORTS
+-- ═══════════════════════════════════════════════════════════════════════════════
+exports('IsDead', function(src) local P = player(src) return P ~= nil and P.PlayerData.metadata.isdead == true end)
+exports('Revive', function(src, health) local P = player(src) if not P then return false end setDead(P, false, 'export') TriggerClientEvent('lxr-doctor:client:revive', src, health or Config.Death.reviveHealth) return true end)
+exports('Kill', function(src, reason) local P = player(src) if not P then return false end setDead(P, true, reason or 'export') TriggerClientEvent('lxr-doctor:client:down', src, Config.Death.bleedOutSeconds, diedAt[src]) return true end)
+exports('DoctorsOnDuty', doctorsOnDuty)

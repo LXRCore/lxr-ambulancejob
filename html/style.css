@@ -1,0 +1,13 @@
+/* LXR-DOCTOR — the death card on top of lxr-ui.css. No colours here: every value is a kit token. */
+.dc-card { position: fixed; left: 50%; bottom: 80px; transform: translateX(-50%); width: 460px; background: var(--lxr-panel-solid); border-top: 1px solid var(--lxr-blood-lit); border-radius: var(--lxr-radius); padding: var(--lxr-s3) var(--lxr-s5) var(--lxr-s4); display: flex; flex-direction: column; gap: var(--lxr-s2); }
+.dc-card.lxr-hidden { display: none; }
+.dc-head { display: flex; align-items: center; gap: var(--lxr-s2); font-size: var(--lxr-text-micro); }
+.dc-logo { width: 18px; height: 18px; object-fit: contain; opacity: .8; }
+.dc-title { font-size: 32px; color: var(--lxr-bone); line-height: 1; }
+.dc-sub { color: var(--lxr-ash); font-size: var(--lxr-text-sm); }
+.dc-timer { display: flex; align-items: center; gap: var(--lxr-s3); margin-top: var(--lxr-s1); }
+.dc-timer .lxr-meter { flex: 1; height: 4px; }
+.dc-left { font-size: var(--lxr-text-body); color: var(--lxr-bone); min-width: 56px; text-align: right; }
+.dc-hint { font-size: var(--lxr-text-micro); }
+.dc-hint .lxr-key { margin-right: var(--lxr-s2); }
+.lxr.lang-ka .dc-title { font-family: var(--lxr-font-ka); }

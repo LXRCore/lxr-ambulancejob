@@ -1,79 +1,52 @@
 --[[
-    ██╗     ██╗  ██╗██████╗        ██████╗ ██████╗ ██████╗ ███████╗
-    ██║     ╚██╗██╔╝██╔══██╗      ██╔════╝██╔═══██╗██╔══██╗██╔════╝
-    ██║      ╚███╔╝ ██████╔╝█████╗██║     ██║   ██║██████╔╝█████╗  
-    ██║      ██╔██╗ ██╔══██╗╚════╝██║     ██║   ██║██╔══██╗██╔══╝  
-    ███████╗██╔╝ ██╗██║  ██║      ╚██████╗╚██████╔╝██║  ██║███████╗
-    ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝       ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝
+    LXR Core - Doctor
 
-    🐺 LXR Ambulance Job - FiveM Resource Manifest
+    Brand:       LXRCore — Lux Empire eXperience RedM Core
+    Product:     wolves.land / The Land of Wolves
+    Developer:   iBoss21 / LXRCore
+    Website:     https://www.lxrcore.com
+    Discord:     https://discord.gg/ZHMKVYyhBa (development)
+    GitHub:      https://github.com/LXRCore
 
-    ═══════════════════════════════════════════════════════════════════════════════
-    RESOURCE INFORMATION
-    ═══════════════════════════════════════════════════════════════════════════════
+    Version: 1.0.0
+    Performance Target: 0.00 ms idle
 
-    Resource Name:  lxr-ambulancejob
-    Version:        1.0.0
-    Author:         iBoss21 / The Lux Empire
-    Description:    Multi-framework ambulance / EMS job system for RedM with
-                    wounding, last-stand, death timers, and hospital mechanics.
+    Framework Support:
+    - LXR Core v3 (Native — GetCoreObject / GetLXR)
 
-    Server:         The Land of Wolves 🐺
-    Website:        https://www.wolves.land
-    Discord:        https://discord.gg/CrKcWdfd3A
-    Store:          https://theluxempire.tebex.io
-
-    ═══════════════════════════════════════════════════════════════════════════════
-    FRAMEWORK SUPPORT
-    ═══════════════════════════════════════════════════════════════════════════════
-
-    Primary:
-    - LXR Core (lxr-core)
-    - RSG Core (rsg-core)
-
-    Supported:
-    - VORP Core (vorp_core)
-
-    Optional (if detected):
-    - RedEM:RP (redem_roleplay)
-    - QBR Core (qbr-core)
-    - QR Core (qr-core)
-    - Standalone (no framework)
-
-    ═══════════════════════════════════════════════════════════════════════════════
-
-    © 2026 iBoss21 / The Lux Empire | wolves.land | All Rights Reserved
+    © 2026 iBoss21 / LXRCore | lxrcore.com | All Rights Reserved
 ]]
 
 fx_version 'cerulean'
 game 'rdr3'
-
 rdr3_warning 'I acknowledge that this is a prerelease build of RedM, and I am aware my resources *will* become incompatible once RedM ships.'
-
--- Resource Metadata
-name        'LXR Ambulance Job'
-author      'iBoss21 / The Lux Empire'
-description 'Multi-framework ambulance / EMS job system for RedM with wounding, last-stand, death timers, and hospital mechanics.'
-version     '1.0.0'
-
--- Lua 5.4
 lua54 'yes'
 
+name 'lxr-doctor'
+author 'iBoss21 / LXRCore'
+description 'LXRCore v3 doctor: death and bleed-out, revives and treatment with catalog medicine, office beds, duty; dispatch hears every fall'
+version '3.0.0'
+repository 'https://github.com/LXRCore/lxr-doctor'
+
 shared_scripts {
-	'@lxr-core/shared/locale.lua',
-	'locale/en.lua',
-	'config.lua'
+    'shared/locale.lua',
+    'locales/*.lua',
+    'config.lua',
+    'shared/rules.lua',
 }
 
-client_scripts {
-	'client/main.lua',
-	'client/wounding.lua',
-	'client/laststand.lua',
-	'client/job.lua',
-	'client/dead.lua'
+client_script 'client/main.lua'
+server_script 'server/main.lua'
+
+ui_page 'html/index.html'
+
+files {
+    'html/index.html',
+    'html/lxr-ui.css',
+    'html/style.css',
+    'html/fonts/*.woff2',
+    'html/app.js',
+    'html/img/*.png',
 }
 
-server_scripts {
-	'@oxmysql/lib/MySQL.lua',
-	'server/main.lua'
-}
+dependencies { 'lxr-core', 'lxr-nui', 'lxr-inventory', 'lxr-interact' }
