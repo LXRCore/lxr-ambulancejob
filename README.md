@@ -1,16 +1,20 @@
-# lxr-ambulancejob
-Ambulance Job for RedM LXRCore
+<img src="https://raw.githubusercontent.com/LXRCore/.github/main/profile/lxrcore-logo.png" alt="LXRCore" width="72" align="left" style="margin-right:12px">
 
-/aheal - Adminheal (Admin Permission needed)
-/revive (id) - Revive a player by ID (Admin Permission needed)
-/setpain - Set Player Painlevel (Admin Permission needed)
+# lxr-ambulancejob — Doctors & ambulance
 
-/heal - heal another Person (Bandage and Ambulancejob needed)
-/revivep - Revive a player nearby (Firstaid and Ambulancejob needed)
-/status - Check Players Healthsats
+Multi-framework ambulance / EMS job system for RedM with wounding, last-stand, death timers, and hospital mechanics.
 
-TODO:
-- better animations for painkillers/bandage/ifak
-- all the IsPedInAnyVehicle Animations
-- BedCam optimization
-- reset animation after healing
+> **Legacy build.** This resource is queued for the LXRCore v3 rebuild — native API, LXR UI Kit interface, configuration in `config.lua`, strings in `locales/`, 1899 economy. Until its rebuild lands it targets the previous core and is not part of the recipe.
+
+## Install
+
+```cfg
+ensure lxr-core
+ensure lxr-ambulancejob
+```
+
+Configuration lives in `config.lua`. Read it before starting the resource.
+
+## Licence
+
+© 2026 iBoss21 / LXRCore — All Rights Reserved. See `LICENSE`.
