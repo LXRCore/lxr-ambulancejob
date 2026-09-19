@@ -40,6 +40,8 @@ Config.Lang = 'en'
 -- ████████████████████████████████████████████████████████████████████████████████
 Config.Death = {
     bleedOutSeconds = 300,        -- how long a downed character waits before they may give up
+    bleedOutNoDoctors = 60,       -- … when no doctor is on duty (the gate only holds while help can come)
+    wipe = { inventory = false, cash = false, keep = { 'id_card' } },   -- what waking at the office costs beyond the fee
     reviveHealth = 200,           -- health after a doctor's revive (max 600)
     respawnHealth = 400,          -- health after waking at the office
     respawnFee = 12.50,           -- 1899: a doctor's visit with a bed was $10–15
@@ -52,6 +54,30 @@ Config.Death = {
 }
 
 -- ████████████████████████████████████████████████████████████████████████████████
+-- ████████████████████████ INJURIES ══════════════════════════════════════════════
+-- ████████████████████████████████████████████████████████████████████████████████
+-- Hits land on a body part (the game's last-damage bone → six parts). A hard enough hit hurts the part;
+-- hurt twice, it breaks; a heavy hit may open a bleed. Legs slow the walk, a broken head blacks out now and
+-- then, bleeding costs health per tick until it is dressed. State lives in character metadata `injuries`.
+Config.Injuries = {
+    enabled = true,
+    hurtAt = 40,            -- health lost in one hit (0–600 scale) that hurts a part
+    breakAt = 120,          -- … that breaks it outright
+    bleedAt = 90,           -- … that opens a bleed (chance below)
+    bleedChance = 0.6,
+    bleedTickSeconds = 30,  -- a bleed costs `bleedDamage` health every tick; walking/running makes ticks come sooner
+    bleedDamage = { 8, 18 },      -- minor, major
+    moveRate = { injured = 0.85, broken = 0.65 },   -- legs
+    blackoutEvery = 45,     -- seconds, a broken head
+    healItems = {           -- what a treat item mends: parts (all | one), bleed levels it stops
+        bandage = { bleed = 1, parts = 'none' }, bandage_clean = { bleed = 2, parts = 'one' },
+        miracle_tonic = { bleed = 2, parts = 'all' }, leeches = { bleed = 1, parts = 'none' }, splint = { bleed = 0, parts = 'one' },
+    },
+    selfItems = { 'bandage', 'bandage_clean' },     -- what a character may use on themselves (a bleed only)
+    parts = { 'head', 'torso', 'left_arm', 'right_arm', 'left_leg', 'right_leg' },
+}
+
+-- ████████████████████████████████████████████████████████████████████████████████
 -- ████████████████████████ THE DOCTORS ═══════════════════════════════════════════
 -- ████████████████████████████████████████████████████████████████████████████████
 Config.Doctors = {
@@ -60,6 +86,7 @@ Config.Doctors = {
     reviveItem = 'bandage_clean',        -- consumed on revive (nil: none)
     treatItems = { 'bandage', 'bandage_clean', 'miracle_tonic', 'leeches' },   -- catalog medicine a doctor may apply to another
     treatMs = 6000, reviveMs = 12000,
+    storage = { slots = 40, weight = 200000 },   -- the office cabinet (lxr-inventory stash per office, the office's jobs)
 }
 
 -- offices: duty desk and a bed. jobs: which medical jobs work here.

@@ -21,6 +21,7 @@ local down, reported = false, false
 local deadline = 0
 local blips = {}
 
+local progress   -- defined with the doctors' options below
 local function me() return LXRCore.PlayerData or {} end
 local function isDoctor() return D.IsDoctor(me().job) end
 local function toast(key, kind, vars) LXRCore.Notify(Lang:t(key, vars), kind or 'info') end
@@ -118,12 +119,64 @@ RegisterNetEvent('lxr-doctor:client:heal', function(add)
     SetEntityHealth(ped, math.min(600, GetEntityHealth(ped) + (tonumber(add) or 0)), 0)
 end)
 
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 🩹 INJURIES — where the hit landed, what it does to the body
+-- ═══════════════════════════════════════════════════════════════════════════════
+local injuries = D.NoInjuries()
+local lastHealth = nil
+local nextBlackout, nextBleedAsk = 0, 0
+local function applyInjuries()
+    local ped = PlayerPedId()
+    SetPedMoveRateOverride(ped, D.MoveRate(injuries))
+end
+RegisterNetEvent('lxr-doctor:client:injuries', function(inj)
+    injuries = type(inj) == 'table' and inj or D.NoInjuries()
+    if type(injuries.parts) ~= 'table' then injuries.parts = {} end
+    applyInjuries()
+end)
+-- the damage watch (piggybacks the 500 ms death watch): a drop in health with a bone → the server
+local function watchDamage(ped)
+    if not Config.Injuries.enabled then return end
+    local h = GetEntityHealth(ped)
+    if lastHealth and h < lastHealth and (lastHealth - h) >= Config.Injuries.hurtAt then
+        local _, bone = GetPedLastDamageBone(ped)   -- (found, bone id)
+        TriggerServerEvent('lxr-doctor:server:hurt', tonumber(bone) or 0, lastHealth - h)
+        ClearPedLastDamageBone(ped)
+    end
+    lastHealth = h
+    if (tonumber(injuries.bleed) or 0) > 0 and GetGameTimer() >= nextBleedAsk then
+        nextBleedAsk = GetGameTimer() + 5000
+        TriggerServerEvent('lxr-doctor:server:bleedTick', IsPedRunning(ped) or IsPedSprinting(ped) or IsPedWalking(ped))
+    end
+    if (tonumber(injuries.parts.head) or 0) >= 2 and GetGameTimer() >= nextBlackout then
+        nextBlackout = GetGameTimer() + Config.Injuries.blackoutEvery * 1000
+        CreateThread(function() DoScreenFadeOut(600) Wait(1800) DoScreenFadeIn(900) end)
+    end
+end
+-- self treatment: use a bandage on yourself (the item's usable handler lands here through the core)
+RegisterNetEvent('lxr-doctor:client:selfTreat', function(item)
+    if down then return end
+    if progress(Lang:t('ui.dressing'), Config.Doctors.treatMs) then TriggerServerEvent('lxr-doctor:server:selfTreat', item) end
+end)
+RegisterCommand('injuries', function()
+    local ok, inj = LXR.RPC.Server('lxr-doctor:myInjuries')
+    if not ok then return end
+    local rows = {}
+    for _, part in ipairs(Config.Injuries.parts) do
+        local lvl = tonumber(inj.parts and inj.parts[part]) or 0
+        rows[#rows + 1] = { id = part, name = Lang:t('part.' .. part), sub = Lang:t('ui.level_' .. lvl) }
+    end
+    rows[#rows + 1] = { id = 'bleed', name = Lang:t('ui.bleeding'), sub = Lang:t('ui.bleed_' .. (tonumber(inj.bleed) or 0)) }
+    exports['lxr-nui']:Menu({ title = Lang:t('ui.injuries'), rows = rows }, function() end)
+end, false)
+
 -- the death watch
 CreateThread(function()
     while true do
         Wait(500)
         if LocalPlayer.state.isLoggedIn and not down and not reported then
             local ped = PlayerPedId()
+            watchDamage(ped)
             if IsEntityDead(ped) or IsPedDeadOrDying(ped, true) then
                 reported = true
                 local cause = 'unknown'
@@ -137,7 +190,7 @@ end)
 -- ═══════════════════════════════════════════════════════════════════════════════
 -- 🩺 DOCTORS' OPTIONS
 -- ═══════════════════════════════════════════════════════════════════════════════
-local function progress(label, ms)
+progress = function(label, ms)
     if GetResourceState('lxr-nui') ~= 'started' then Wait(ms) return true end
     local done = nil
     exports['lxr-nui']:Progress({ label = label, duration = ms, canCancel = true }, function(ok) done = ok end)
@@ -152,6 +205,19 @@ CreateThread(function()
     I:AddGlobal('lxr-doctor:player', 'player', { label = Lang:t('ui.patient'), distance = Config.Security.maxDistance, options = {
         { label = Lang:t('ui.revive'), key = 'G', canInteract = function(e) return isDoctor() and e and Player(sid(e)).state.dead == true end,
           onSelect = function(d) local id = sid(d.entity) if progress(Lang:t('ui.reviving'), Config.Doctors.reviveMs) then TriggerServerEvent('lxr-doctor:server:revive', id) end end },
+        { label = Lang:t('ui.examine'), key = 'H', canInteract = function(e) return isDoctor() and e ~= nil end,
+          onSelect = function(d)
+              local id = sid(d.entity)
+              local ok, res = LXR.RPC.Server('lxr-doctor:examine', id)
+              if not ok then return toast('error.' .. tostring(res), 'error') end
+              local rows = {}
+              for _, part in ipairs(Config.Injuries.parts) do
+                  local lvl = tonumber(res.injuries.parts and res.injuries.parts[part]) or 0
+                  rows[#rows + 1] = { id = part, name = Lang:t('part.' .. part), sub = Lang:t('ui.level_' .. lvl), badge = lvl > 0 and tostring(lvl) or nil }
+              end
+              rows[#rows + 1] = { id = 'bleed', name = Lang:t('ui.bleeding'), sub = Lang:t('ui.bleed_' .. (tonumber(res.injuries.bleed) or 0)) }
+              exports['lxr-nui']:Menu({ title = res.name, subtitle = Lang:t('ui.health', { n = math.floor((res.health or 0) / 6) }), rows = rows }, function() end)
+          end },
         { label = Lang:t('ui.treat'), key = 'E', canInteract = function(e) return isDoctor() and e and Player(sid(e)).state.dead ~= true end,
           onSelect = function(d)
               local id = sid(d.entity)
@@ -162,13 +228,23 @@ CreateThread(function()
               end
               if #rows == 0 then return toast('error.no_medicine', 'error') end
               exports['lxr-nui']:Menu({ title = Lang:t('ui.treat'), rows = rows }, function(item)
-                  if item and progress(Lang:t('ui.treating'), Config.Doctors.treatMs) then TriggerServerEvent('lxr-doctor:server:treat', id, item) end
+                  if not item then return end
+                  local rule = Config.Injuries.healItems[item]
+                  if rule and rule.parts == 'one' then
+                      -- which part: ask, then work
+                      local parts = {}
+                      for _, part in ipairs(Config.Injuries.parts) do parts[#parts + 1] = { id = part, name = Lang:t('part.' .. part) } end
+                      exports['lxr-nui']:Menu({ title = Lang:t('ui.which_part'), rows = parts }, function(part)
+                          if part and progress(Lang:t('ui.treating'), Config.Doctors.treatMs) then TriggerServerEvent('lxr-doctor:server:treat', id, item, part) end
+                      end)
+                  elseif progress(Lang:t('ui.treating'), Config.Doctors.treatMs) then TriggerServerEvent('lxr-doctor:server:treat', id, item) end
               end)
           end },
     }})
     for _, o in ipairs(Config.Offices) do
         I:AddPoint('lxr-doctor:desk:' .. o.id, o.desk, { label = o.label, distance = Config.Security.promptDistance, options = {
             { label = Lang:t('ui.duty'), key = 'J', canInteract = function() return D.IsDoctor(me().job, true) end, onSelect = function() local ok, res = LXR.RPC.Server('lxr-doctor:duty', o.id) if not ok then toast('error.' .. tostring(res), 'error') end end },
+            { label = Lang:t('ui.cabinet'), key = 'E', canInteract = function() return D.IsDoctor(me().job, true) end, onSelect = function() local ok, res = LXR.RPC.Server('lxr-doctor:cabinet', o.id) if not ok then toast('error.' .. tostring(res), 'error') end end },
         }})
         I:AddPoint('lxr-doctor:bed:' .. o.id, vector3(o.bed.x, o.bed.y, o.bed.z), { label = Lang:t('ui.bed'), distance = Config.Security.promptDistance, options = {
             { label = Lang:t('ui.lie_down', { fee = ('%.2f'):format(Config.Bed.fee) }), key = 'J', canInteract = function() return Config.Bed.enabled end, onSelect = function()
@@ -196,4 +272,5 @@ AddEventHandler('onResourceStart', function(res) if res == GetCurrentResourceNam
 AddEventHandler('onResourceStop', function(res) if res == GetCurrentResourceName() then for _, b in ipairs(blips) do RemoveBlip(b) end SetEntityInvincible(PlayerPedId(), false) end end)
 
 exports('IsDown', function() return down end)
+exports('GetInjuries', function() return injuries end)
 exports('IsDoctor', isDoctor)

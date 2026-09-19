@@ -52,7 +52,31 @@ function D.Heal(item)
     return math.max(0, math.min(100, h)) * 6   -- catalog effects are 0–100, ped health is 0–600
 end
 
----Seconds left before a downed character may give up.
-function D.BleedLeft(diedAt, now)
-    return math.max(0, Config.Death.bleedOutSeconds - (now - diedAt))
+---Seconds left before a downed character may give up (shorter when no doctor is on duty).
+function D.BleedLeft(diedAt, now, doctorsOnDuty)
+    local wait = (doctorsOnDuty ~= nil and doctorsOnDuty == 0 and Config.Death.bleedOutNoDoctors) or Config.Death.bleedOutSeconds
+    return math.max(0, wait - (now - diedAt))
+end
+
+---Body part for a damage bone id (nil when unknown).
+function D.PartOf(bone) return D.Bones and D.Bones[tonumber(bone) or -1] or nil end
+
+---A blank injury record.
+function D.NoInjuries() return { parts = {}, bleed = 0 } end
+
+---Is anything wrong.
+function D.Hurt(inj)
+    if type(inj) ~= 'table' then return false end
+    if (tonumber(inj.bleed) or 0) > 0 then return true end
+    for _, v in pairs(inj.parts or {}) do if (tonumber(v) or 0) > 0 then return true end end
+    return false
+end
+
+---Worst leg state (0 fine, 1 injured, 2 broken) → move rate.
+function D.MoveRate(inj)
+    local p = type(inj) == 'table' and inj.parts or {}
+    local worst = math.max(tonumber(p.left_leg) or 0, tonumber(p.right_leg) or 0)
+    if worst >= 2 then return Config.Injuries.moveRate.broken end
+    if worst == 1 then return Config.Injuries.moveRate.injured end
+    return 1.0
 end

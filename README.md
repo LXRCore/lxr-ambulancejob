@@ -25,6 +25,9 @@ type `medical` in the core registry is a doctor here.
 * **Treatment** — a doctor picks medicine from what they carry
   (`Config.Doctors.treatItems`); the catalog's `effects.health` becomes ped
   health.
+* **Injuries** — every hard hit lands on a body part (the game's last-damage bone → head, torso, arms, legs, from the game's own bone lists in `shared/bones.lua`): hurt, then broken; a heavy hit may open a bleed. Hurt legs slow the walk (`SetPedMoveRateOverride`), a broken head blacks out now and then, a bleed costs health per tick — sooner while moving — until it is dressed. A bandage from the satchel stops a bleed (and heals as before); a doctor's **Examine** shows the patient's parts and bleed, **Treat** asks which part a splint or clean bandage mends, a tonic mends everything. `/injuries` shows your own. State lives in character metadata `injuries` and the `injured` state bag; `Config.Injuries`, `/setinjury id part level` (admin), exports `GetInjuries / SetInjuries`.
+* **Waking at the office** — the wait is shorter when no doctor is on duty (`bleedOutNoDoctors`); `Config.Death.wipe` can take the satchel (minus `keep`) and the cash.
+* **Cabinet** — an lxr-inventory stash per office for its jobs (`Config.Doctors.storage`).
 * **Duty** — at the office desk. Offices carry blips.
 * **Events** — `lxr:player:died (src, cause)`, `lxr:player:revived (src,
   reason)`, `lxr:doctor:treated (target, doctor, item, heal)`.

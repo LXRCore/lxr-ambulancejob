@@ -33,6 +33,7 @@ shared_scripts {
     'shared/locale.lua',
     'locales/*.lua',
     'config.lua',
+    'shared/bones.lua',
     'shared/rules.lua',
 }
 
