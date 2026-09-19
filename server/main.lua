@@ -184,6 +184,15 @@ CreateThread(function() if Config.Debug.printBanner then print(('^1[lxr-doctor]^
 -- 📤 EXPORTS
 -- ═══════════════════════════════════════════════════════════════════════════════
 exports('IsDead', function(src) local P = player(src) return P ~= nil and P.PlayerData.metadata.isdead == true end)
-exports('Revive', function(src, health) local P = player(src) if not P then return false end setDead(P, false, 'export') TriggerClientEvent('lxr-doctor:client:revive', src, health or Config.Death.reviveHealth) return true end)
+exports('Revive', function(src, health)
+    local P = player(tonumber(src))
+    if not P then return false end
+    local ok, err = xpcall(function()
+        setDead(P, false, 'export')
+        TriggerClientEvent('lxr-doctor:client:revive', P.PlayerData.source, tonumber(health) or Config.Death.reviveHealth)
+    end, debug.traceback)
+    if not ok then LXRCore.Log.error('doctor', 'revive export failed', { source = src, error = tostring(err) }) return false end
+    return true
+end)
 exports('Kill', function(src, reason) local P = player(src) if not P then return false end setDead(P, true, reason or 'export') TriggerClientEvent('lxr-doctor:client:down', src, Config.Death.bleedOutSeconds, diedAt[src]) return true end)
 exports('DoctorsOnDuty', doctorsOnDuty)

@@ -25,12 +25,23 @@ local function page(action, payload) SendNUIMessage({ action = action, payload =
 -- ═══════════════════════════════════════════════════════════════════════════════
 -- ☠️ DOWN
 -- ═══════════════════════════════════════════════════════════════════════════════
+-- the wounded pose; when the dictionary does not load (or the game refuses the clip) the ped is
+-- kept on the ground with a short ragdoll instead — a downed player never walks around
+local poseOk = false
 local function pose()
     local a = Config.Death.anim
+    local ped = PlayerPedId()
     RequestAnimDict(a.dict)
-    local t = GetGameTimer() + 3000
+    local t = GetGameTimer() + 1500
     while not HasAnimDictLoaded(a.dict) and GetGameTimer() < t do Wait(10) end
-    TaskPlayAnim(PlayerPedId(), a.dict, a.name, 8.0, -8.0, -1, 1, 0, false, false, false)
+    if HasAnimDictLoaded(a.dict) then
+        TaskPlayAnim(ped, a.dict, a.name, 8.0, -8.0, -1, 1, 0, false, false, false)
+        Wait(150)
+        poseOk = IsEntityPlayingAnim(ped, a.dict, a.name, 3)
+    else
+        poseOk = false
+    end
+    if not poseOk then SetPedToRagdoll(ped, 1200, 1200, 0, false, false, nil) end
 end
 
 local function standUp(health)
@@ -62,7 +73,11 @@ RegisterNetEvent('lxr-doctor:client:down', function(seconds, at)
         local lastSent = -1
         while down do
             for _, c in ipairs(Config.Death.controlsWhileDown) do DisableControlAction(0, c, true) end
-            if not IsEntityPlayingAnim(ped, Config.Death.anim.dict, Config.Death.anim.name, 3) then pose() end
+            if poseOk then
+                if not IsEntityPlayingAnim(ped, Config.Death.anim.dict, Config.Death.anim.name, 3) then pose() end
+            elseif not IsPedRagdoll(ped) then
+                SetPedToRagdoll(ped, 1200, 1200, 0, false, false, nil)
+            end
             local left = math.max(0, math.ceil((deadline - GetGameTimer()) / 1000))
             if left ~= lastSent then lastSent = left page('tick', { left = left }) end
             if left <= 0 and IsControlJustReleased(0, 0xCEFD9220) then   -- E: give up
